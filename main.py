@@ -5,6 +5,9 @@ import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
+from tianshou.highlevel.trainer import EpochTrainCallbackDQNEpsLinearDecay
+
+from algorithms.dqn import SoftDQNPolicy
 
 from datetime import datetime
 
@@ -18,18 +21,6 @@ if __name__=="__main__":
     state_shape = env.observation_space.shape or env.observation_space.n
     action_shape = env.action_space.shape or env.action_space.n
 
-
-    ## wrapper to conform with tianshu
-    class WrappedQNet(nn.Module):
-        def __init__(self, net: nn.Module, action_dim: int):
-            super().__init__()
-            self.net = net
-            self.q_head = nn.Linear(128, action_dim)
-
-        def forward(self, obs, state=None, info={}):
-            feat, state = self.net(obs, state=state, info=info)
-            return self.q_head(feat), state
-
     net = ts.utils.net.common.Net(
             state_shape=state_shape, 
             action_shape=action_shape,
@@ -37,20 +28,19 @@ if __name__=="__main__":
             device="cpu"
         )
     print(net)
-    # net = WrappedQNet(net, np.prod(action_shape))
     optim = torch.optim.Adam(net.parameters(), lr = 1e-3)
 
-        ## define the DQN policy
-    policy = ts.policy.DQNPolicy(
-        model = net, # our network
-        optim=optim,
-        action_space=env.action_space,
-        discount_factor = 0.9,
-        estimation_step=1,
-        target_update_freq=320 ## overwrite this class to enable soft update?
+    policy = SoftDQNPolicy(
+        model = net,
+        optim = optim,
+        action_space = env.action_space,
+        discount_factor = 0.99,
+        estimation_step = 1,
+        target_update_freq=1, # each update for soft updates
+        tau = 0.05 # soft update parameter for polyak averaging
     )
-    t = datetime.now().strftime("%d-%m-%Y-%H:%M:%S")
-    writer=SummaryWriter(f'log/{ENV_NAME}/')
+    t = datetime.now().strftime("%d%m%Y%H%M%S")
+    writer=SummaryWriter(f'log/{ENV_NAME}/{t}_dqn/')
 
     train_collector = ts.data.Collector(
         policy=policy, ## the dqn
@@ -59,6 +49,16 @@ if __name__=="__main__":
         exploration_noise=True
     )
     test_collector = ts.data.Collector(policy, test_envs, exploration_noise=True)
+    def linear_decay(step, eps_start=1.0, eps_end=0.05, decay_steps=10_000):
+        if step >= decay_steps:
+            return eps_end
+        else:
+            return eps_start - (eps_start - eps_end) * (step / decay_steps)
+        
+    def set_eps_linear_decay(epoch, env_step):
+        eps = linear_decay(env_step)
+        policy.set_eps(eps)
+
 
     result = ts.trainer.OffpolicyTrainer(
         policy=policy,
@@ -66,7 +66,7 @@ if __name__=="__main__":
         test_collector=test_collector,
         max_epoch=25, step_per_epoch=10000, step_per_collect=10,
         update_per_step=0.1, episode_per_test=100, batch_size=64,
-        train_fn=lambda epoch, env_step: policy.set_eps(0.1), ## could adjust this to increment epsilon
+        train_fn=lambda epoch, env_step: set_eps_linear_decay(epoch, env_step), ## could adjust this to increment epsilon
         test_fn=lambda epoch, env_step: policy.set_eps(0.0),
         stop_fn=lambda mean_rewards: mean_rewards >= 500,
         logger=TensorboardLogger(writer)
