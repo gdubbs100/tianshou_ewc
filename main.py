@@ -10,7 +10,7 @@ from tianshou.highlevel.trainer import EpochTrainCallbackDQNEpsLinearDecay
 from algorithms.dqn import SoftDQNPolicy
 from environments.custom_cartpole import ModifiableCartPole
 from utils.continual_logger import ContinualTensorboardLogger
-from utils.continual_trainer import ContinualOffpolicyTrainer
+from utils.continual_trainer import ContinualTrainer
 
 from datetime import datetime
 
@@ -53,12 +53,12 @@ if __name__=="__main__":
         policy.set_eps(eps)
 
     ## Making continual learner
-    TASKS = [0, 1, 2]
+    # TASKS = [0, 1, 2]
     NUM_ENVS = 10
-    PARAMS = {
-        0: {},
-        1: {"masspole": 0.1, "force_mag":15.0},
-        2: {"masspole": 1.0, "force_mag": 2.0}
+    TASKS = {
+        0: {'id':'ModifiableCartPole-v0'},
+        1: {'id':'ModifiableCartPole-v0', "masspole": 0.1, "force_mag":15.0},
+        2: {'id':'ModifiableCartPole-v0', "masspole": 1.0, "force_mag": 2.0}
     }
     MAX_EPOCH = 5
     STEPS_PER_COLLECT = 10
@@ -66,73 +66,89 @@ if __name__=="__main__":
     UPDATE_PER_STEP = 0.1
     EPISODE_PER_TEST=10
     BATCH_SIZE=64
-    eps=1.0
-    global_steps = 0
-    for task in TASKS:
-        print(f"Training task: {task}...")
-        # train_envs = ts.env.DummyVectorEnv([lambda: ModifiableCartPole(**PARAMS[task]) for _ in range(NUM_ENVS)])
-        train_envs = ts.env.DummyVectorEnv([lambda: gym.make(id='ModifiableCartPole-v0', **PARAMS[task]) for _ in range(NUM_ENVS)])
-        train_collector = ts.data.Collector(
-            policy=policy, ## the dqn
-            env=train_envs,
-            ## TODO: think about this - do we want to share replay buffers across tasks?
-            ## will this setup allow that?
-            buffer=ts.data.VectorReplayBuffer(total_size=20000, buffer_num=10), # total_size is num obs, buffer_num is number per env
-            exploration_noise=True
-        )
-        train_collector.reset_env()
-        ## create envs for each environment to be learnt
-        eval_envs = [
-            # ts.env.DummyVectorEnv([lambda: ModifiableCartPole(**PARAMS[eval_task]) for _ in range(10)])
-            ts.env.DummyVectorEnv([lambda: gym.make(id='ModifiableCartPole-v0',**PARAMS[eval_task]) for _ in range(10)]) 
-            for eval_task in TASKS
-        ]
-        eval_collectors = [
-            ts.data.Collector(policy, eval_env, exploration_noise=False) 
-            for eval_env in eval_envs
-        ]
-        # breakpoint()
-        for epoch in range(MAX_EPOCH):
-            epoch_steps=0
-            while epoch_steps < STEPS_PER_EPOCH:
+    trainer = ContinualTrainer(policy=policy, writer=writer, tasks = TASKS, steps_per_task=10_000)
+
+    trainer.run(
+        num_train_envs=10,
+        num_eval_envs=10,
+        steps_per_rollout=STEPS_PER_COLLECT,
+        update_per_step=UPDATE_PER_STEP,
+        eval_every=1000,
+        batch_size=BATCH_SIZE
+
+    )
+
+
+
+
+
+    # eps=1.0
+    # global_steps = 0
+    # for task in TASKS:
+    #     print(f"Training task: {task}...")
+    #     # train_envs = ts.env.DummyVectorEnv([lambda: ModifiableCartPole(**PARAMS[task]) for _ in range(NUM_ENVS)])
+    #     train_envs = ts.env.DummyVectorEnv([lambda: gym.make(id='ModifiableCartPole-v0', **PARAMS[task]) for _ in range(NUM_ENVS)])
+    #     train_collector = ts.data.Collector(
+    #         policy=policy, ## the dqn
+    #         env=train_envs,
+    #         ## TODO: think about this - do we want to share replay buffers across tasks?
+    #         ## will this setup allow that?
+    #         buffer=ts.data.VectorReplayBuffer(total_size=20000, buffer_num=10), # total_size is num obs, buffer_num is number per env
+    #         exploration_noise=True
+    #     )
+    #     train_collector.reset_env()
+    #     ## create envs for each environment to be learnt
+    #     eval_envs = [
+    #         # ts.env.DummyVectorEnv([lambda: ModifiableCartPole(**PARAMS[eval_task]) for _ in range(10)])
+    #         ts.env.DummyVectorEnv([lambda: gym.make(id='ModifiableCartPole-v0',**PARAMS[eval_task]) for _ in range(10)]) 
+    #         for eval_task in TASKS
+    #     ]
+    #     eval_collectors = [
+    #         ts.data.Collector(policy, eval_env, exploration_noise=False) 
+    #         for eval_env in eval_envs
+    #     ]
+    #     # breakpoint()
+    #     for epoch in range(MAX_EPOCH):
+    #         epoch_steps=0
+    #         while epoch_steps < STEPS_PER_EPOCH:
                 
-                eps = linear_decay(epoch_steps + global_steps)
-                policy.set_eps(eps)
-                results = train_collector.collect(
-                    n_step=STEPS_PER_COLLECT,
-                    reset_before_collect=False
-                )
-                epoch_steps += results.n_collected_steps
+    #             eps = linear_decay(epoch_steps + global_steps)
+    #             policy.set_eps(eps)
+    #             results = train_collector.collect(
+    #                 n_step=STEPS_PER_COLLECT,
+    #                 reset_before_collect=False
+    #             )
+    #             epoch_steps += results.n_collected_steps
 
-                if results.returns_stat is not None:
-                    writer.add_scalar(f"train/{task}_mean", results.returns_stat.mean, global_steps+epoch_steps)
-                    writer.add_scalar(f"train/{task}_std", results.returns_stat.std, global_steps+epoch_steps)
+    #             if results.returns_stat is not None:
+    #                 writer.add_scalar(f"train/{task}_mean", results.returns_stat.mean, global_steps+epoch_steps)
+    #                 writer.add_scalar(f"train/{task}_std", results.returns_stat.std, global_steps+epoch_steps)
         
-                ## do update
-                policy.is_within_training_step=True
-                num_updates = int(UPDATE_PER_STEP * results.n_collected_steps)
-                loss=0
-                for _ in range(num_updates):
-                    update_results = policy.update(BATCH_SIZE, train_collector.buffer)
-                    loss += update_results.loss
-                policy.is_within_training_step=False
+    #             ## do update
+    #             policy.is_within_training_step=True
+    #             num_updates = int(UPDATE_PER_STEP * results.n_collected_steps)
+    #             loss=0
+    #             for _ in range(num_updates):
+    #                 update_results = policy.update(BATCH_SIZE, train_collector.buffer)
+    #                 loss += update_results.loss
+    #             policy.is_within_training_step=False
 
-                writer.add_scalar(f"train/loss", loss / num_updates, global_steps + epoch_steps)
-                writer.add_scalar(f"train/eps", eps, global_steps + epoch_steps)
+    #             writer.add_scalar(f"train/loss", loss / num_updates, global_steps + epoch_steps)
+    #             writer.add_scalar(f"train/eps", eps, global_steps + epoch_steps)
             
-            ## evaluate once per epoch
-            policy.set_eps(0.0)
-            for i, eval_collector in enumerate(eval_collectors):
-                eval_results = eval_collector.collect(
-                    n_episode=EPISODE_PER_TEST,
-                    reset_before_collect=True
-                )
-                writer.add_scalar(f"test/{i}_mean", eval_results.returns_stat.mean, global_steps + epoch_steps)
-                writer.add_scalar(f"test/{i}_std", eval_results.returns_stat.std, global_steps + epoch_steps)
-                print(f"STEP: {global_steps + epoch_steps}: Achieved reward for task_{i}: {eval_results.returns_stat.mean} +/- {eval_results.returns_stat.std}")
+    #         ## evaluate once per epoch
+    #         policy.set_eps(0.0)
+    #         for i, eval_collector in enumerate(eval_collectors):
+    #             eval_results = eval_collector.collect(
+    #                 n_episode=EPISODE_PER_TEST,
+    #                 reset_before_collect=True
+    #             )
+    #             writer.add_scalar(f"test/{i}_mean", eval_results.returns_stat.mean, global_steps + epoch_steps)
+    #             writer.add_scalar(f"test/{i}_std", eval_results.returns_stat.std, global_steps + epoch_steps)
+    #             print(f"STEP: {global_steps + epoch_steps}: Achieved reward for task_{i}: {eval_results.returns_stat.mean} +/- {eval_results.returns_stat.std}")
             
-            global_steps += epoch_steps
-            # set_eps_linear_decay(epoch, global_steps)
+    #         global_steps += epoch_steps
+    #         # set_eps_linear_decay(epoch, global_steps)
             
 
             
