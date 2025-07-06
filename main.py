@@ -4,13 +4,11 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
-from tianshou.utils import TensorboardLogger
-from tianshou.highlevel.trainer import EpochTrainCallbackDQNEpsLinearDecay
 
 from algorithms.dqn import SoftDQNPolicy
 from environments.custom_cartpole import ModifiableCartPole
-from utils.continual_logger import ContinualTensorboardLogger
 from utils.continual_trainer import ContinualTrainer
+from utils.logger import Logger
 
 from datetime import datetime
 
@@ -20,13 +18,18 @@ if __name__=="__main__":
     env = gym.make(ENV_NAME)
     state_shape = env.observation_space.shape or env.observation_space.n
     action_shape = env.action_space.shape or env.action_space.n
-
+    hidden_sizes = [64, 64]
     net = ts.utils.net.common.Net(
             state_shape=state_shape, 
             action_shape=action_shape,
-            hidden_sizes = [128, 128],
+            hidden_sizes = hidden_sizes,
+            dueling_param = (
+                {'hidden_sizes': hidden_sizes},
+                {'hidden_sizes': hidden_sizes},
+            ),
             device="cpu"
         )
+    
     optim = torch.optim.Adam(net.parameters(), lr = 1e-3)
 
     policy = SoftDQNPolicy(
@@ -38,27 +41,28 @@ if __name__=="__main__":
         target_update_freq=1, # each update for soft updates
         tau = 0.05 # soft update parameter for polyak averaging
     )
-    policy.set_eps(1.0)
-    t = datetime.now().strftime("%d%m%Y%H%M%S")
-    writer=SummaryWriter(f'log/custom_continual/{ENV_NAME}/{t}_dqn/')
 
-    def linear_decay(step, eps_start=1.0, eps_end=0.05, decay_steps=10_000):
-        if step >= decay_steps:
-            return eps_end
-        else:
-            return eps_start - (eps_start - eps_end) * (step / decay_steps)
-        
-    def set_eps_linear_decay(epoch, env_step):
-        eps = linear_decay(env_step)
-        policy.set_eps(eps)
+    t = datetime.now().strftime("%d%m%Y%H%M%S")
+    logger = Logger(
+        filepath=f'log/custom_continual/{ENV_NAME}/{t}_dqn/',
+        csv_headers = [
+            'training_task',
+            'eval_task',
+            'global_step',
+            'mean_rew',
+            'std_rew',
+            'min_rew',
+            'max_rew'
+        ]
+    )
 
     ## Making continual learner
     # TASKS = [0, 1, 2]
     NUM_ENVS = 10
     TASKS = {
         0: {'id':'ModifiableCartPole-v0'},
-        1: {'id':'ModifiableCartPole-v0', "masspole": 0.1, "force_mag":15.0},
-        2: {'id':'ModifiableCartPole-v0', "masspole": 1.0, "force_mag": 2.0}
+        1: {'id':'ModifiableCartPole-v0', "masscart": 0.1,"masspole": 0.1, "force_mag":25.0},
+        2: {'id':'ModifiableCartPole-v0', "masspole": 2.0, "force_mag": 1.0}
     }
     MAX_EPOCH = 5
     STEPS_PER_COLLECT = 10
@@ -66,14 +70,20 @@ if __name__=="__main__":
     UPDATE_PER_STEP = 0.1
     EPISODE_PER_TEST=10
     BATCH_SIZE=64
-    trainer = ContinualTrainer(policy=policy, writer=writer, tasks = TASKS, steps_per_task=10_000)
+    trainer = ContinualTrainer(
+        policy=policy, 
+        writer=logger, 
+        tasks = TASKS, 
+        steps_per_task=100_000,
+        replay_buffer_size = 20_000)
 
     trainer.run(
         num_train_envs=10,
         num_eval_envs=10,
         steps_per_rollout=STEPS_PER_COLLECT,
         update_per_step=UPDATE_PER_STEP,
-        eval_every=1000,
+        eval_every=5000,
+        save_model_every=5000,
         batch_size=BATCH_SIZE
 
     )

@@ -1,4 +1,5 @@
 from tianshou.policy import DQNPolicy
+from utils.misc import linear_decay
 
 ## do I need to add TrainingStats?
 class SoftDQNPolicy(DQNPolicy):
@@ -22,3 +23,20 @@ class SoftDQNPolicy(DQNPolicy):
                 + (1 - self.tau) * old_weights[key]
             )
         self.model_old.load_state_dict(old_weights)
+    
+    def training_mode(self):
+        self.is_within_training_step=True
+        self.set_eps(self.eps)
+    
+    def testing_mode(self, eps=0.0):
+        self.is_within_training_step=True
+        self.set_eps(eps)
+
+    def on_task_start(self):
+        self.eps = 1.0
+
+    def on_task_step(self, task_step):
+        self.calc_eps_linear_decay(task_step)
+
+    def calc_eps_linear_decay(self, env_step):
+        self.eps = linear_decay(env_step)
