@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
-from algorithms.dqn import SoftDQNPolicy
+from algorithms.dqn import SoftDQNPolicy, EWCDQNPolicy
 from environments.custom_cartpole import ModifiableCartPole
 from utils.continual_trainer import ContinualTrainer
 from utils.logger import Logger
@@ -32,14 +32,25 @@ if __name__=="__main__":
     
     optim = torch.optim.Adam(net.parameters(), lr = 1e-3)
 
-    policy = SoftDQNPolicy(
+    # policy = SoftDQNPolicy(
+    #     model = net,
+    #     optim = optim,
+    #     action_space = env.action_space,
+    #     discount_factor = 0.99,
+    #     estimation_step = 1,
+    #     target_update_freq=1, # each update for soft updates
+    #     tau = 0.05 # soft update parameter for polyak averaging
+    # )
+    policy = EWCDQNPolicy(
+        ewc_reg_penalty = 400,
+        tau = 0.05, # soft update parameter for polyak averaging
         model = net,
         optim = optim,
         action_space = env.action_space,
         discount_factor = 0.99,
         estimation_step = 1,
         target_update_freq=1, # each update for soft updates
-        tau = 0.05 # soft update parameter for polyak averaging
+    
     )
 
     t = datetime.now().strftime("%d%m%Y%H%M%S")
@@ -65,8 +76,8 @@ if __name__=="__main__":
         2: {'id':'ModifiableCartPole-v0', "masspole": 2.0, "force_mag": 1.0}
     }
     MAX_EPOCH = 5
-    STEPS_PER_COLLECT = 10
-    STEPS_PER_EPOCH = 10000
+    STEPS_PER_COLLECT = 100
+    # STEPS_PER_EPOCH = 1000
     UPDATE_PER_STEP = 0.1
     EPISODE_PER_TEST=10
     BATCH_SIZE=64
@@ -74,7 +85,7 @@ if __name__=="__main__":
         policy=policy, 
         writer=logger, 
         tasks = TASKS, 
-        steps_per_task=100_000,
+        steps_per_task=10000,
         replay_buffer_size = 20_000)
 
     trainer.run(
